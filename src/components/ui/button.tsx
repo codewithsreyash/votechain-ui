@@ -15,6 +15,9 @@ const buttonVariants = cva(
         secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "hover:bg-accent hover:text-accent-foreground",
         link: "text-primary underline-offset-4 hover:underline",
+        blockchain: "bg-gradient-accent text-accent-foreground hover:shadow-glow transition-all duration-300",
+        vote: "bg-vote-success text-primary-foreground hover:bg-vote-success/90",
+        admin: "bg-trust-blue text-primary-foreground hover:bg-trust-blue/90",
       },
       size: {
         default: "h-10 px-4 py-2",
