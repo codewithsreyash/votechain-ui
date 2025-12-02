@@ -68,23 +68,35 @@ export function useElections() {
     endDate: string,
     userId: string
   ) => {
-    const { data, error } = await supabase
-      .from("elections")
-      .insert({
-        name,
-        description,
-        start_date: startDate,
-        end_date: endDate,
-        status: "pending",
-        created_by: userId
-      })
-      .select()
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from("elections")
+        .insert({
+          name,
+          description,
+          start_date: startDate,
+          end_date: endDate,
+          status: "pending",
+          created_by: userId
+        })
+        .select()
+        .single();
 
-    if (!error) {
-      fetchElections();
+      if (error) {
+        console.error("Supabase error creating election:", error);
+        return { data: null, error };
+      }
+
+      // Refresh elections list
+      await fetchElections();
+      return { data, error: null };
+    } catch (err) {
+      console.error("Exception creating election:", err);
+      return { 
+        data: null, 
+        error: err instanceof Error ? err : new Error("Unknown error occurred") 
+      };
     }
-    return { data, error };
   };
 
   const updateElectionStatus = async (electionId: string, status: string) => {

@@ -71,3 +71,43 @@ Yes, you can!
 To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
 
 Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+
+## Setting Up Admin Access
+
+To create elections, you need to have admin role assigned to your user account. Here's how to set it up:
+
+### Option 1: Using Supabase SQL Editor
+
+1. Go to your Supabase dashboard
+2. Navigate to SQL Editor
+3. Run the following SQL query (replace `YOUR_USER_EMAIL` with your actual email):
+
+```sql
+-- First, get your user ID from auth.users
+-- Replace 'YOUR_USER_EMAIL' with your actual email address
+INSERT INTO public.user_roles (user_id, role)
+SELECT id, 'admin'::app_role
+FROM auth.users
+WHERE email = 'YOUR_USER_EMAIL'
+ON CONFLICT (user_id, role) DO NOTHING;
+```
+
+### Option 2: Using Supabase Dashboard
+
+1. Go to Authentication > Users in your Supabase dashboard
+2. Find your user and copy the User UID
+3. Go to Table Editor > user_roles
+4. Insert a new row with:
+   - `user_id`: Your User UID
+   - `role`: `admin`
+
+### Troubleshooting
+
+If you're unable to create elections:
+
+1. **Check browser console** - Open Developer Tools (F12) and check the Console tab for error messages
+2. **Verify admin role** - Check if your user has an entry in the `user_roles` table with `role = 'admin'`
+3. **Check RLS policies** - Ensure Row Level Security policies are correctly set up in your database
+4. **Verify authentication** - Make sure you're logged in and your session is valid
+
+The create election function will now show detailed error messages to help diagnose issues.

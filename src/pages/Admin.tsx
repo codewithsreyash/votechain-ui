@@ -15,7 +15,7 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { supabase } from "@/integrations/supabase/client";
 
 function AdminContent() {
-  const { user, isAdmin, signOut } = useAuth();
+  const { user, isAdmin, signOut, grantAdminRole } = useAuth();
   const { elections, loading, createElection, updateElectionStatus, getVoteCount } = useElections();
   
   const [electionName, setElectionName] = useState("");
@@ -29,6 +29,7 @@ function AdminContent() {
   
   const [voteCounts, setVoteCounts] = useState<Record<string, number>>({});
   const [totalVoters, setTotalVoters] = useState(0);
+  const [adminCheckResult, setAdminCheckResult] = useState<{ checking: boolean; result: string | null }>({ checking: false, result: null });
 
   useEffect(() => {
     // Fetch vote counts for all elections
@@ -66,6 +67,8 @@ function AdminContent() {
   }, [elections]);
 
   const handleCreateElection = async () => {
+    console.log("Create election clicked", { electionName, description, startDate, endDate, user: user?.id, isAdmin });
+    
     if (!electionName || !description || !startDate || !endDate) {
       toast.error("Please fill in all fields");
       return;
@@ -76,24 +79,81 @@ function AdminContent() {
       return;
     }
 
-    setIsCreating(true);
-    const { error } = await createElection(
-      electionName,
-      description,
-      new Date(startDate).toISOString(),
-      new Date(endDate).toISOString(),
-      user.id
-    );
-    setIsCreating(false);
+    if (!isAdmin) {
+      console.warn("User does not have admin role. User ID:", user.id);
+      toast.error("You need admin privileges to create elections. Please ensure your account has the admin role in the database.");
+      return;
+    }
 
-    if (error) {
-      toast.error("Failed to create election");
-    } else {
-      toast.success("Election created successfully!");
-      setElectionName("");
-      setDescription("");
-      setStartDate("");
-      setEndDate("");
+    // Validate dates
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      toast.error("Invalid date format");
+      return;
+    }
+
+    if (end <= start) {
+      toast.error("End date must be after start date");
+      return;
+    }
+
+    setIsCreating(true);
+    try {
+      console.log("Calling createElection with:", {
+        name: electionName,
+        description,
+        startDate: start.toISOString(),
+        endDate: end.toISOString(),
+        userId: user.id
+      });
+      
+      const { data, error } = await createElection(
+        electionName,
+        description,
+        start.toISOString(),
+        end.toISOString(),
+        user.id
+      );
+      
+      console.log("Create election response:", { data, error });
+      
+      if (error) {
+        console.error("Create election error details:", {
+          message: error.message,
+          details: error.details,
+          hint: error.hint,
+          code: error.code
+        });
+        
+        let errorMessage = "Failed to create election.";
+        if (error.message) {
+          errorMessage = error.message;
+        } else if (error.details) {
+          errorMessage = error.details;
+        } else if (error.hint) {
+          errorMessage = error.hint;
+        }
+        
+        // Provide helpful messages for common errors
+        if (errorMessage.includes("permission") || errorMessage.includes("policy") || errorMessage.includes("RLS")) {
+          errorMessage = "Permission denied. Please ensure your account has admin role in the user_roles table.";
+        }
+        
+        toast.error(errorMessage);
+      } else {
+        toast.success("Election created successfully!");
+        setElectionName("");
+        setDescription("");
+        setStartDate("");
+        setEndDate("");
+      }
+    } catch (err) {
+      console.error("Unexpected error creating election:", err);
+      toast.error(err instanceof Error ? err.message : "An unexpected error occurred");
+    } finally {
+      setIsCreating(false);
     }
   };
 
@@ -109,6 +169,87 @@ function AdminContent() {
   const handleSignOut = async () => {
     await signOut();
     toast.success("Signed out successfully");
+  };
+
+  const checkAdminStatus = async () => {
+    if (!user) {
+      setAdminCheckResult({ checking: false, result: "No user logged in" });
+      return;
+    }
+
+    setAdminCheckResult({ checking: true, result: null });
+    
+    try {
+      // Check user_roles table
+      const { data: roleData, error: roleError } = await supabase
+        .from("user_roles")
+        .select("role, user_id")
+        .eq("user_id", user.id)
+        .eq("role", "admin")
+        .maybeSingle();
+
+      // Also check auth.users to verify user exists
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+
+      let result = `User ID: ${user.id}\n`;
+      result += `Email: ${user.email}\n`;
+      result += `Auth User: ${authUser ? 'Found' : 'Not found'}\n\n`;
+      
+      if (roleError) {
+        result += `❌ Error checking roles: ${roleError.message}\n`;
+        result += `Details: ${JSON.stringify(roleError, null, 2)}`;
+      } else if (roleData) {
+        result += `✅ Admin role found in database!\n`;
+        result += `Role: ${roleData.role}\n`;
+        result += `User ID in roles table: ${roleData.user_id}`;
+      } else {
+        result += `❌ No admin role found in user_roles table.\n`;
+        result += `\nClick "Grant Admin Role" button below to automatically fix this!`;
+      }
+
+      setAdminCheckResult({ checking: false, result });
+      console.log("Admin check result:", result);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Unknown error";
+      setAdminCheckResult({ checking: false, result: `Error: ${errorMsg}` });
+      console.error("Error checking admin status:", err);
+    }
+  };
+
+  const handleGrantAdmin = async () => {
+    if (!user) {
+      toast.error("You must be logged in");
+      return;
+    }
+
+    setAdminCheckResult({ checking: true, result: null });
+    
+    try {
+      const { success, error } = await grantAdminRole();
+      
+      if (success) {
+        toast.success("Admin role granted successfully! Please refresh the page.");
+        setAdminCheckResult({ 
+          checking: false, 
+          result: "✅ Admin role granted! Please refresh the page to see changes." 
+        });
+        // Refresh admin status after a short delay
+        setTimeout(() => {
+          window.location.reload();
+        }, 2000);
+      } else {
+        const errorMsg = error instanceof Error ? error.message : "Unknown error";
+        toast.error(`Failed to grant admin role: ${errorMsg}`);
+        setAdminCheckResult({ 
+          checking: false, 
+          result: `❌ Error: ${errorMsg}\n\nYou may need to run the SQL migration in Supabase.` 
+        });
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Unknown error";
+      toast.error(`Error: ${errorMsg}`);
+      setAdminCheckResult({ checking: false, result: `Error: ${errorMsg}` });
+    }
   };
 
   const activeElections = elections.filter(e => e.status === "active");
@@ -240,7 +381,8 @@ function AdminContent() {
                 variant="admin" 
                 className="w-full"
                 onClick={handleCreateElection}
-                disabled={isCreating || !isAdmin}
+                disabled={isCreating}
+                title={!isAdmin ? "You need admin role to create elections" : ""}
               >
                 {isCreating ? (
                   <>
@@ -251,6 +393,38 @@ function AdminContent() {
                   "Create Election"
                 )}
               </Button>
+            {!isAdmin && (
+              <div className="mt-2 space-y-2">
+                <p className="text-sm text-destructive">
+                  ⚠️ Admin role required. Click below to automatically grant admin access.
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={handleGrantAdmin}
+                    disabled={adminCheckResult.checking}
+                    className="flex-1"
+                  >
+                    {adminCheckResult.checking ? "Granting..." : "🔑 Grant Admin Role"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={checkAdminStatus}
+                    disabled={adminCheckResult.checking}
+                    className="flex-1"
+                  >
+                    {adminCheckResult.checking ? "Checking..." : "Check Status"}
+                  </Button>
+                </div>
+                {adminCheckResult.result && (
+                  <div className="mt-2 p-3 bg-muted rounded-md text-xs font-mono whitespace-pre-wrap max-h-48 overflow-y-auto">
+                    {adminCheckResult.result}
+                  </div>
+                )}
+              </div>
+            )}
             </CardContent>
           </Card>
 

@@ -40,16 +40,29 @@ export function useAuth() {
   }, []);
 
   const checkAdminRole = async (userId: string) => {
-    const { data, error } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", userId)
-      .eq("role", "admin")
-      .maybeSingle();
+    try {
+      const { data, error } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", userId)
+        .eq("role", "admin")
+        .maybeSingle();
 
-    if (!error && data) {
-      setIsAdmin(true);
-    } else {
+      if (error) {
+        console.error("Error checking admin role:", error);
+        setIsAdmin(false);
+        return;
+      }
+
+      if (data) {
+        console.log("Admin role found for user:", userId);
+        setIsAdmin(true);
+      } else {
+        console.log("No admin role found for user:", userId);
+        setIsAdmin(false);
+      }
+    } catch (err) {
+      console.error("Exception checking admin role:", err);
       setIsAdmin(false);
     }
   };
@@ -81,6 +94,30 @@ export function useAuth() {
     return { error };
   };
 
+  const grantAdminRole = async (email?: string) => {
+    try {
+      if (email) {
+        const { data, error } = await supabase.rpc('grant_admin_role', { user_email: email });
+        if (error) throw error;
+        // Refresh admin status
+        if (user) {
+          await checkAdminRole(user.id);
+        }
+        return { success: true, error: null };
+      } else if (user) {
+        const { data, error } = await supabase.rpc('grant_admin_role_by_id', { user_uuid: user.id });
+        if (error) throw error;
+        // Refresh admin status
+        await checkAdminRole(user.id);
+        return { success: true, error: null };
+      }
+      return { success: false, error: new Error('No user or email provided') };
+    } catch (err) {
+      console.error('Error granting admin role:', err);
+      return { success: false, error: err };
+    }
+  };
+
   return {
     user,
     session,
@@ -88,6 +125,8 @@ export function useAuth() {
     loading,
     signUp,
     signIn,
-    signOut
+    signOut,
+    grantAdminRole,
+    checkAdminRole
   };
 }
