@@ -29,6 +29,9 @@ export const Navbar = () => {
             <Link to="/results" className="text-sm font-medium hover:text-accent transition-colors">
               Results
             </Link>
+            <Link to="/kiosk" className="text-sm font-medium hover:text-accent transition-colors">
+              Kiosk Mode
+            </Link>
           </div>
 
           <Button variant="blockchain" size="sm" className="gap-2">
