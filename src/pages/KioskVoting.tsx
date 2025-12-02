@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
@@ -12,59 +12,117 @@ import {
   ArrowRight, 
   ArrowLeft,
   Loader2,
-  FileCheck
+  FileCheck,
+  AlertCircle
 } from "lucide-react";
+import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { useElections, useCandidates, type Election, type Candidate } from "@/hooks/useElections";
 
-type Screen = "welcome" | "auth" | "ballot" | "review" | "success";
-
-interface Candidate {
-  id: string;
-  name: string;
-  party: string;
-  position: string;
-}
-
-const candidates: Candidate[] = [
-  { id: "1", name: "Alexandra Chen", party: "Progressive Alliance", position: "President" },
-  { id: "2", name: "Marcus Williams", party: "Unity Coalition", position: "President" },
-  { id: "3", name: "Sarah Mitchell", party: "Citizens First", position: "President" },
-  { id: "4", name: "Robert Garcia", party: "Independent", position: "President" },
-];
+type Screen = "welcome" | "select-election" | "auth" | "ballot" | "review" | "success";
 
 export default function KioskVoting() {
+  const { elections, loading: electionsLoading } = useElections();
   const [currentScreen, setCurrentScreen] = useState<Screen>("welcome");
+  const [selectedElection, setSelectedElection] = useState<Election | null>(null);
   const [voterId, setVoterId] = useState("");
   const [votingToken, setVotingToken] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
   const [verificationStatus, setVerificationStatus] = useState("");
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
   const [receiptCode, setReceiptCode] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const { candidates, loading: candidatesLoading } = useCandidates(selectedElection?.id);
+
+  const activeElections = elections.filter(e => e.status === "active");
 
   const handleVerify = async () => {
-    if (!voterId || !votingToken) return;
+    if (!voterId || !votingToken || !selectedElection) return;
     
     setIsVerifying(true);
     setVerificationStatus("Checking your eligibility…");
     
-    // Simulate verification
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    setVerificationStatus("Verifying credentials on blockchain…");
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    setIsVerifying(false);
-    setCurrentScreen("ballot");
+    try {
+      // Check if voter already voted in this election
+      const { data: existingVoter } = await supabase
+        .from("voters")
+        .select("has_voted")
+        .eq("voter_id", voterId)
+        .eq("election_id", selectedElection.id)
+        .maybeSingle();
+
+      if (existingVoter?.has_voted) {
+        setIsVerifying(false);
+        setVerificationStatus("");
+        toast.error("You have already voted in this election");
+        return;
+      }
+
+      setVerificationStatus("Verifying credentials on blockchain…");
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Register voter if not exists
+      if (!existingVoter) {
+        await supabase.from("voters").insert({
+          voter_id: voterId,
+          election_id: selectedElection.id,
+          has_voted: false
+        });
+      }
+      
+      setIsVerifying(false);
+      setCurrentScreen("ballot");
+    } catch (error) {
+      setIsVerifying(false);
+      setVerificationStatus("");
+      toast.error("Verification failed. Please try again.");
+    }
   };
 
   const handleSubmitVote = async () => {
+    if (!selectedCandidate || !selectedElection) return;
+
+    setIsSubmitting(true);
+    
     // Generate receipt code
     const code = `BLK-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-    setReceiptCode(code);
-    setCurrentScreen("success");
+    
+    try {
+      // Insert anonymous vote
+      const { error: voteError } = await supabase.from("votes").insert({
+        election_id: selectedElection.id,
+        candidate_id: selectedCandidate.id,
+        receipt_code: code
+      });
+
+      if (voteError) throw voteError;
+
+      // Mark voter as having voted
+      const { error: voterError } = await supabase
+        .from("voters")
+        .update({ 
+          has_voted: true, 
+          voted_at: new Date().toISOString(),
+          receipt_code: code
+        })
+        .eq("voter_id", voterId)
+        .eq("election_id", selectedElection.id);
+
+      if (voterError) throw voterError;
+
+      setReceiptCode(code);
+      setIsSubmitting(false);
+      setCurrentScreen("success");
+    } catch (error) {
+      setIsSubmitting(false);
+      toast.error("Failed to submit vote. Please try again.");
+    }
   };
 
   const handleFinish = () => {
-    // Reset everything
     setCurrentScreen("welcome");
+    setSelectedElection(null);
     setVoterId("");
     setVotingToken("");
     setSelectedCandidate(null);
@@ -76,7 +134,6 @@ export default function KioskVoting() {
   const WelcomeScreen = () => (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gradient-to-b from-gov-blue to-primary p-8">
       <div className="text-center space-y-8 max-w-2xl">
-        {/* Government Seal/Logo */}
         <div className="flex justify-center mb-8">
           <div className="w-32 h-32 rounded-full bg-gov-white/10 backdrop-blur-sm border-4 border-gov-gold flex items-center justify-center">
             <Shield className="w-16 h-16 text-gov-gold" />
@@ -108,11 +165,70 @@ export default function KioskVoting() {
         </div>
 
         <Button 
-          onClick={() => setCurrentScreen("auth")}
+          onClick={() => setCurrentScreen("select-election")}
           className="mt-12 h-20 px-16 text-2xl font-semibold bg-gov-gold hover:bg-gov-gold/90 text-gov-blue rounded-xl shadow-elevated transition-all hover:scale-105"
         >
           Start Voting
           <ArrowRight className="w-8 h-8 ml-3" />
+        </Button>
+      </div>
+    </div>
+  );
+
+  // Election Selection Screen
+  const ElectionSelectScreen = () => (
+    <div className="flex flex-col items-center justify-center min-h-screen bg-gov-white p-8">
+      <div className="w-full max-w-2xl space-y-8">
+        <div className="text-center space-y-4">
+          <div className="flex justify-center mb-6">
+            <div className="w-20 h-20 rounded-full bg-gov-blue/10 flex items-center justify-center">
+              <Vote className="w-10 h-10 text-gov-blue" />
+            </div>
+          </div>
+          <h2 className="text-4xl font-bold text-gov-blue">Select Election</h2>
+          <p className="text-lg text-muted-foreground">Choose the election you want to vote in</p>
+        </div>
+
+        {electionsLoading ? (
+          <div className="flex justify-center py-12">
+            <Loader2 className="w-8 h-8 animate-spin text-gov-blue" />
+          </div>
+        ) : activeElections.length === 0 ? (
+          <Card className="border-2 border-vote-pending/30">
+            <CardContent className="p-8 text-center">
+              <AlertCircle className="w-12 h-12 text-vote-pending mx-auto mb-4" />
+              <p className="text-lg text-muted-foreground">
+                No active elections at the moment.
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid gap-4">
+            {activeElections.map((election) => (
+              <Card
+                key={election.id}
+                onClick={() => {
+                  setSelectedElection(election);
+                  setCurrentScreen("auth");
+                }}
+                className="cursor-pointer transition-all border-2 border-gov-blue/20 hover:border-gov-gold hover:shadow-elevated"
+              >
+                <CardContent className="p-6">
+                  <h3 className="text-2xl font-semibold text-foreground mb-2">{election.name}</h3>
+                  <p className="text-muted-foreground">{election.description}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+
+        <Button
+          variant="ghost"
+          onClick={() => setCurrentScreen("welcome")}
+          className="w-full h-14 text-lg text-muted-foreground"
+        >
+          <ArrowLeft className="w-5 h-5 mr-2" />
+          Back to Welcome
         </Button>
       </div>
     </div>
@@ -129,7 +245,9 @@ export default function KioskVoting() {
             </div>
           </div>
           <h2 className="text-4xl font-bold text-gov-blue">Voter Authentication</h2>
-          <p className="text-lg text-muted-foreground">Please enter your credentials to verify eligibility</p>
+          <p className="text-lg text-muted-foreground">
+            Voting for: <span className="font-semibold text-foreground">{selectedElection?.name}</span>
+          </p>
         </div>
 
         <Card className="border-2 border-gov-blue/20 shadow-card">
@@ -188,11 +306,11 @@ export default function KioskVoting() {
 
         <Button
           variant="ghost"
-          onClick={() => setCurrentScreen("welcome")}
+          onClick={() => setCurrentScreen("select-election")}
           className="w-full h-14 text-lg text-muted-foreground"
         >
           <ArrowLeft className="w-5 h-5 mr-2" />
-          Back to Welcome
+          Back to Elections
         </Button>
       </div>
     </div>
@@ -212,40 +330,57 @@ export default function KioskVoting() {
           <p className="text-lg text-muted-foreground">Tap on a candidate to select</p>
         </div>
 
-        <div className="grid gap-4">
-          {candidates.map((candidate) => (
-            <Card
-              key={candidate.id}
-              onClick={() => setSelectedCandidate(candidate)}
-              className={`cursor-pointer transition-all border-2 ${
-                selectedCandidate?.id === candidate.id
-                  ? "border-gov-gold bg-gov-gold/10 shadow-elevated"
-                  : "border-gov-blue/20 hover:border-gov-blue/40 hover:shadow-card"
-              }`}
-            >
-              <CardContent className="p-6 flex items-center gap-6">
-                <div className={`w-8 h-8 rounded-full border-3 flex items-center justify-center ${
+        {candidatesLoading ? (
+          <div className="flex justify-center py-12">
+            <Loader2 className="w-8 h-8 animate-spin text-gov-blue" />
+          </div>
+        ) : candidates.length === 0 ? (
+          <Card className="border-2 border-vote-pending/30">
+            <CardContent className="p-8 text-center">
+              <AlertCircle className="w-12 h-12 text-vote-pending mx-auto mb-4" />
+              <p className="text-lg text-muted-foreground">
+                No candidates have been added to this election yet.
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid gap-4">
+            {candidates.map((candidate) => (
+              <Card
+                key={candidate.id}
+                onClick={() => setSelectedCandidate(candidate)}
+                className={`cursor-pointer transition-all border-2 ${
                   selectedCandidate?.id === candidate.id
-                    ? "border-gov-gold bg-gov-gold"
-                    : "border-gov-blue/40"
-                }`}>
-                  {selectedCandidate?.id === candidate.id && (
-                    <CheckCircle2 className="w-5 h-5 text-white" />
+                    ? "border-gov-gold bg-gov-gold/10 shadow-elevated"
+                    : "border-gov-blue/20 hover:border-gov-blue/40 hover:shadow-card"
+                }`}
+              >
+                <CardContent className="p-6 flex items-center gap-6">
+                  <div className={`w-8 h-8 rounded-full border-3 flex items-center justify-center ${
+                    selectedCandidate?.id === candidate.id
+                      ? "border-gov-gold bg-gov-gold"
+                      : "border-gov-blue/40"
+                  }`}>
+                    {selectedCandidate?.id === candidate.id && (
+                      <CheckCircle2 className="w-5 h-5 text-white" />
+                    )}
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-2xl font-semibold text-foreground">{candidate.name}</h3>
+                    <p className="text-lg text-muted-foreground">{candidate.party}</p>
+                  </div>
+                  {candidate.position && (
+                    <div className="text-right">
+                      <span className="text-sm font-medium text-gov-blue bg-gov-blue/10 px-3 py-1 rounded-full">
+                        {candidate.position}
+                      </span>
+                    </div>
                   )}
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-2xl font-semibold text-foreground">{candidate.name}</h3>
-                  <p className="text-lg text-muted-foreground">{candidate.party}</p>
-                </div>
-                <div className="text-right">
-                  <span className="text-sm font-medium text-gov-blue bg-gov-blue/10 px-3 py-1 rounded-full">
-                    {candidate.position}
-                  </span>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
 
         <div className="flex gap-4 pt-4">
           <Button
@@ -289,11 +424,13 @@ export default function KioskVoting() {
               <p className="text-lg text-muted-foreground uppercase tracking-wide">Your Selection</p>
               <h3 className="text-3xl font-bold text-foreground">{selectedCandidate?.name}</h3>
               <p className="text-xl text-gov-blue">{selectedCandidate?.party}</p>
-              <div className="pt-4">
-                <span className="text-sm font-medium text-gov-gold bg-gov-gold/10 px-4 py-2 rounded-full">
-                  {selectedCandidate?.position}
-                </span>
-              </div>
+              {selectedCandidate?.position && (
+                <div className="pt-4">
+                  <span className="text-sm font-medium text-gov-gold bg-gov-gold/10 px-4 py-2 rounded-full">
+                    {selectedCandidate.position}
+                  </span>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -310,14 +447,25 @@ export default function KioskVoting() {
         <div className="flex flex-col gap-4">
           <Button
             onClick={handleSubmitVote}
+            disabled={isSubmitting}
             className="w-full h-16 text-xl font-semibold bg-vote-success hover:bg-vote-success/90 text-white rounded-xl"
           >
-            <CheckCircle2 className="w-6 h-6 mr-2" />
-            Confirm & Submit Vote
+            {isSubmitting ? (
+              <>
+                <Loader2 className="w-6 h-6 mr-2 animate-spin" />
+                Submitting...
+              </>
+            ) : (
+              <>
+                <CheckCircle2 className="w-6 h-6 mr-2" />
+                Confirm & Submit Vote
+              </>
+            )}
           </Button>
           <Button
             variant="outline"
             onClick={() => setCurrentScreen("ballot")}
+            disabled={isSubmitting}
             className="w-full h-14 text-lg border-2 border-gov-blue/30 text-gov-blue"
           >
             <ArrowLeft className="w-5 h-5 mr-2" />
@@ -371,6 +519,7 @@ export default function KioskVoting() {
   // Render current screen
   const screens: Record<Screen, JSX.Element> = {
     welcome: <WelcomeScreen />,
+    "select-election": <ElectionSelectScreen />,
     auth: <AuthScreen />,
     ballot: <BallotScreen />,
     review: <ReviewScreen />,
