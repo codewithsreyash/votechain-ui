@@ -57,6 +57,11 @@ export default {
           success: "hsl(var(--vote-success))",
           pending: "hsl(var(--vote-pending))",
         },
+        gov: {
+          blue: "hsl(var(--gov-blue))",
+          gold: "hsl(var(--gov-gold))",
+          white: "hsl(var(--gov-white))",
+        },
       },
       backgroundImage: {
         'gradient-primary': 'var(--gradient-primary)',
@@ -106,6 +111,10 @@ export default {
           from: { transform: "translateY(20px)", opacity: "0" },
           to: { transform: "translateY(0)", opacity: "1" },
         },
+        "scale-in": {
+          from: { transform: "scale(0)", opacity: "0" },
+          to: { transform: "scale(1)", opacity: "1" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
@@ -113,6 +122,7 @@ export default {
         "float": "float 6s ease-in-out infinite",
         "glow": "glow 2s ease-in-out infinite",
         "slide-in": "slide-in 0.5s ease-out",
+        "scale-in": "scale-in 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)",
       },
     },
   },
